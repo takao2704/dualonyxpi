@@ -316,21 +316,19 @@ sleep 1
 # Add Soracom connection profile
 echo "---"
 echo "Adding Soracom connection profile..."
-CONNECTIONS=""
 WWAN_INTERFACES="$(get_wwan_interfaces)"
 if [ -n "$WWAN_INTERFACES" ]
 then
     for iface in $WWAN_INTERFACES
     do
         connection_name="soracom-${iface}"
-        CONNECTIONS="${CONNECTIONS} ${connection_name}"
         if nmcli con show "${connection_name}" > /dev/null 2>&1
         then
             echo "Soracom connection profile already exists: ${connection_name}!"
             if [ "$(nmcli -t -f GENERAL.STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "deactivated" ]
             then
                 printf "Bringing up connection ${connection_name}..."
-                (nmcli con up "${connection_name}" >> /var/log/soracom_setup.log 2>&1) &
+                (nmcli con up "${connection_name}" ifname "${iface}" >> /var/log/soracom_setup.log 2>&1) &
                 spin $!
                 printf " Done!\n"
             fi
@@ -354,7 +352,6 @@ else
         nmcli con add type gsm ifname "*" con-name soracom apn $APN user $USERNAME password $PASSWORD >> /var/log/soracom_setup.log 2>&1
         echo "Connection profile added: soracom"
     fi
-    CONNECTIONS="soracom"
 fi
 echo
 sleep 1
@@ -365,23 +362,39 @@ if [ "$HEADLESS" = "false" ]
 then
     if [ "$bullseye_or_later" = "true" ]
     then
-        for iface in $WWAN_INTERFACES
-        do
-            ifconfig "${iface}" down
-            if [ -e "/sys/class/net/${iface}/qmi/raw_ip" ]
+        if [ -n "$WWAN_INTERFACES" ]
+        then
+            for iface in $WWAN_INTERFACES
+            do
+                ifconfig "${iface}" down
+                if [ -e "/sys/class/net/${iface}/qmi/raw_ip" ]
+                then
+                    echo "Y" > "/sys/class/net/${iface}/qmi/raw_ip"
+                fi
+                ifconfig "${iface}" up
+            done
+            for iface in $WWAN_INTERFACES
+            do
+                connection_name="soracom-${iface}"
+                if nmcli con show "${connection_name}" > /dev/null 2>&1
+                then
+                    if [ "$(nmcli -t -f GENERAL.STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "activated" ]
+                    then
+                        nmcli con down "${connection_name}"
+                    fi
+                    nmcli con up "${connection_name}" ifname "${iface}"
+                fi
+            done
+        else
+            if nmcli con show soracom > /dev/null 2>&1
             then
-                echo "Y" > "/sys/class/net/${iface}/qmi/raw_ip"
+                if [ "$(nmcli -t -f GENERAL.STATE con show soracom | head -1 | awk -F: '{print $2}')" = "activated" ]
+                then
+                    nmcli con down soracom
+                fi
+                nmcli con up soracom
             fi
-            ifconfig "${iface}" up
-        done
-        for connection_name in $CONNECTIONS
-        do
-            if [ "$(nmcli -t -f GENERAL.STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "activated" ]
-            then
-                nmcli con down "${connection_name}"
-            fi
-            nmcli con up "${connection_name}"
-        done
+        fi
     fi
 fi
 
@@ -407,5 +420,7 @@ Tips:
 - You can manually disconnect and reconnect the modem using:
     sudo nmcli con down soracom-wwan0
     sudo nmcli con up soracom-wwan0
+    sudo nmcli con down soracom-wwan1
+    sudo nmcli con up soracom-wwan1
 
 EOF
