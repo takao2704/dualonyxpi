@@ -106,6 +106,12 @@ get_wwan_interfaces()
     ls /sys/class/net 2>/dev/null | grep -E '^wwan[0-9]+' || true
 }
 
+is_nmcli_device_present()
+{
+    device_name="$1"
+    nmcli -t -f DEVICE dev status 2>/dev/null | awk -F: '{print $1}' | grep -Fx "$device_name" > /dev/null 2>&1
+}
+
 # Showing progress with a bash spinner
 # https://github.com/marascio/bash-tips-and-tricks/tree/master/showing-progress-with-a-bash-spinner
 spin()
@@ -327,10 +333,15 @@ then
             echo "Soracom connection profile already exists: ${connection_name}!"
             if [ "$(nmcli -t -f GENERAL.STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "deactivated" ]
             then
-                printf "Bringing up connection ${connection_name}..."
-                (nmcli con up "${connection_name}" ifname "${iface}" >> /var/log/soracom_setup.log 2>&1) &
-                spin $!
-                printf " Done!\n"
+                if is_nmcli_device_present "${iface}"
+                then
+                    printf "Bringing up connection ${connection_name}..."
+                    (nmcli con up "${connection_name}" ifname "${iface}" >> /var/log/soracom_setup.log 2>&1) &
+                    spin $!
+                    printf " Done!\n"
+                else
+                    echo "Skipping activation for ${connection_name}; device ${iface} not found by NetworkManager."
+                fi
             fi
         else
             nmcli con add type gsm ifname "${iface}" con-name "${connection_name}" apn $APN user $USERNAME password $PASSWORD >> /var/log/soracom_setup.log 2>&1
@@ -378,11 +389,16 @@ then
                 connection_name="soracom-${iface}"
                 if nmcli con show "${connection_name}" > /dev/null 2>&1
                 then
-                    if [ "$(nmcli -t -f GENERAL.STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "activated" ]
+                    if is_nmcli_device_present "${iface}"
                     then
-                        nmcli con down "${connection_name}"
+                        if [ "$(nmcli -t -f GENERAL.STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "activated" ]
+                        then
+                            nmcli con down "${connection_name}"
+                        fi
+                        nmcli con up "${connection_name}" ifname "${iface}"
+                    else
+                        echo "Skipping activation for ${connection_name}; device ${iface} not found by NetworkManager."
                     fi
-                    nmcli con up "${connection_name}" ifname "${iface}"
                 fi
             done
         else
