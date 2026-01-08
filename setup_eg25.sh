@@ -324,10 +324,10 @@ then
     do
         connection_name="soracom-${iface}"
         CONNECTIONS="${CONNECTIONS} ${connection_name}"
-        if nmcli con show "${connection_name}" &> /dev/null
+        if nmcli con show "${connection_name}" > /dev/null 2>&1
         then
             echo "Soracom connection profile already exists: ${connection_name}!"
-            if [ "$(nmcli -t -f DEVICE,STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "disconnected" ]
+            if [ "$(nmcli -t -f GENERAL.STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "deactivated" ]
             then
                 printf "Bringing up connection ${connection_name}..."
                 (nmcli con up "${connection_name}" >> /var/log/soracom_setup.log 2>&1) &
@@ -340,10 +340,10 @@ then
         fi
     done
 else
-    if nmcli con show soracom &> /dev/null
+    if nmcli con show soracom > /dev/null 2>&1
     then
         echo "Soracom connection profile already exists!"
-        if [ "$(nmcli dev | grep soracom | awk '{print $3}')" = "disconnected" ]
+        if [ "$(nmcli -t -f GENERAL.STATE con show soracom | head -1 | awk -F: '{print $2}')" = "deactivated" ]
         then
             printf "Bringing up connection..."
             (nmcli con up soracom >> /var/log/soracom_setup.log 2>&1) &
@@ -376,7 +376,10 @@ then
         done
         for connection_name in $CONNECTIONS
         do
-            nmcli con down "${connection_name}"
+            if [ "$(nmcli -t -f GENERAL.STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "activated" ]
+            then
+                nmcli con down "${connection_name}"
+            fi
             nmcli con up "${connection_name}"
         done
     fi
@@ -402,7 +405,7 @@ Tips:
 - When you reboot or plug in your modem, it will automatically connect.
 - When wifi is connected, the modem will be used only for Soracom services.
 - You can manually disconnect and reconnect the modem using:
-    sudo nmcli con down soracom
-    sudo nmcli con up soracom
+    sudo nmcli con down soracom-wwan0
+    sudo nmcli con up soracom-wwan0
 
 EOF
