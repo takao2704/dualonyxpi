@@ -111,23 +111,6 @@ get_nmcli_gsm_devices()
     nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | awk -F: '$2 == "gsm" {print $1}'
 }
 
-get_nth_item()
-{
-    list="$1"
-    target_index="$2"
-    index=1
-    for item in $list
-    do
-        if [ "$index" -eq "$target_index" ]
-        then
-            echo "$item"
-            return 0
-        fi
-        index=$((index + 1))
-    done
-    return 1
-}
-
 is_nmcli_device_present()
 {
     device_name="$1"
@@ -346,16 +329,10 @@ echo "---"
 echo "Adding Soracom connection profile..."
 WWAN_INTERFACES="$(get_wwan_interfaces)"
 GSM_DEVICES="$(get_nmcli_gsm_devices)"
-if [ -n "$WWAN_INTERFACES" ]
+if [ -n "$GSM_DEVICES" ]
 then
-    wwan_index=1
-    for iface in $WWAN_INTERFACES
+    for device_name in $GSM_DEVICES
     do
-        device_name="$(get_nth_item "$GSM_DEVICES" "$wwan_index")"
-        if [ -z "$device_name" ]
-        then
-            device_name="${iface}"
-        fi
         connection_name="soracom-${device_name}"
         if nmcli con show "${connection_name}" > /dev/null 2>&1
         then
@@ -376,7 +353,6 @@ then
             nmcli con add type gsm ifname "${device_name}" con-name "${connection_name}" apn $APN user $USERNAME password $PASSWORD >> /var/log/soracom_setup.log 2>&1
             echo "Connection profile added: ${connection_name}"
         fi
-        wwan_index=$((wwan_index + 1))
     done
 else
     if nmcli con show soracom > /dev/null 2>&1
@@ -403,9 +379,8 @@ if [ "$HEADLESS" = "false" ]
 then
     if [ "$bullseye_or_later" = "true" ]
     then
-        if [ -n "$WWAN_INTERFACES" ]
+        if [ -n "$GSM_DEVICES" ]
         then
-            wwan_index=1
             for iface in $WWAN_INTERFACES
             do
                 ifconfig "${iface}" down
@@ -415,14 +390,8 @@ then
                 fi
                 ifconfig "${iface}" up
             done
-            wwan_index=1
-            for iface in $WWAN_INTERFACES
+            for device_name in $GSM_DEVICES
             do
-                device_name="$(get_nth_item "$GSM_DEVICES" "$wwan_index")"
-                if [ -z "$device_name" ]
-                then
-                    device_name="${iface}"
-                fi
                 connection_name="soracom-${device_name}"
                 if nmcli con show "${connection_name}" > /dev/null 2>&1
                 then
@@ -437,7 +406,6 @@ then
                         echo "Skipping activation for ${connection_name}; device ${device_name} not found by NetworkManager."
                     fi
                 fi
-                wwan_index=$((wwan_index + 1))
             done
         else
             if nmcli con show soracom > /dev/null 2>&1
