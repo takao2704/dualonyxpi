@@ -351,12 +351,12 @@ then
     wwan_index=1
     for iface in $WWAN_INTERFACES
     do
-        connection_name="soracom-${iface}"
         device_name="$(get_nth_item "$GSM_DEVICES" "$wwan_index")"
         if [ -z "$device_name" ]
         then
             device_name="${iface}"
         fi
+        connection_name="soracom-${device_name}"
         if nmcli con show "${connection_name}" > /dev/null 2>&1
         then
             echo "Soracom connection profile already exists: ${connection_name}!"
@@ -418,12 +418,12 @@ then
             wwan_index=1
             for iface in $WWAN_INTERFACES
             do
-                connection_name="soracom-${iface}"
                 device_name="$(get_nth_item "$GSM_DEVICES" "$wwan_index")"
                 if [ -z "$device_name" ]
                 then
                     device_name="${iface}"
                 fi
+                connection_name="soracom-${device_name}"
                 if nmcli con show "${connection_name}" > /dev/null 2>&1
                 then
                     if is_nmcli_device_present "${device_name}"
@@ -472,9 +472,8 @@ Tips:
 - When you reboot or plug in your modem, it will automatically connect.
 - When wifi is connected, the modem will be used only for Soracom services.
 - You can manually disconnect and reconnect the modem using:
-    sudo nmcli con down soracom-wwan0
-    sudo nmcli con up soracom-wwan0
-    sudo nmcli con down soracom-wwan1
-    sudo nmcli con up soracom-wwan1
+    nmcli con show | grep soracom
+    sudo nmcli con down soracom-<device>
+    sudo nmcli con up soracom-<device>
 
 EOF
