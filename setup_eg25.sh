@@ -9,7 +9,7 @@ setup_modem()
 {
 for n in {1..5}
 do
-    usb_modeswitch -v 12d1 -p 14fe -J &>> /var/log/soracom_setup.log
+    usb_modeswitch -v 12d1 -p 14fe -J >> /var/log/soracom_setup.log 2>&1
     sleep 2
     if lsusb | grep 12d1:1506 > /dev/null
     then
@@ -106,16 +106,27 @@ get_wwan_interfaces()
     ls /sys/class/net 2>/dev/null | grep -E '^wwan[0-9]+' || true
 }
 
+get_nmcli_gsm_devices()
+{
+    nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | awk -F: '$2 == "gsm" {print $1}'
+}
+
+is_nmcli_device_present()
+{
+    device_name="$1"
+    nmcli -t -f DEVICE dev status 2>/dev/null | awk -F: '{print $1}' | grep -Fx "$device_name" > /dev/null 2>&1
+}
+
 # Showing progress with a bash spinner
 # https://github.com/marascio/bash-tips-and-tricks/tree/master/showing-progress-with-a-bash-spinner
 spin()
 {
-    local pid=$1
-    local spinner='|/-\'
+    pid=$1
+    spinner='|/-\'
     while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
-        local temp=${spinner#?}
+        temp=${spinner#?}
         printf " [%c]  " "$spinner"
-        local spinner=$temp${spinner%"$temp"}
+        spinner=$temp${spinner%"$temp"}
         sleep 0.25
         printf "\b\b\b\b\b\b"
     done
@@ -163,7 +174,7 @@ done
 shift $((OPTIND-1))
 
 # Begin setup
-if [ $UID != 0 ]
+if [ "$(id -u)" -ne 0 ]
 then
     echo "You must run this script as root. Please try again using \"sudo ./setup.sh\""
     exit 1
@@ -183,15 +194,15 @@ echo "Installing required packages (this may take a few minutes)..."
 if [ ! -x /usr/bin/nmcli -o ! -x /usr/sbin/usb_modeswitch ]
 then
     printf "Updating package list..."
-    (apt-get update &>> /var/log/soracom_setup.log) &
+    (apt-get update >> /var/log/soracom_setup.log 2>&1) &
     spin $!
     printf " Done!\n"
     printf "Installing network-manager..."
-    (apt-get install -y network-manager &>> /var/log/soracom_setup.log) &
+    (apt-get install -y network-manager >> /var/log/soracom_setup.log 2>&1) &
     spin $!
     printf " Done!\n"
     printf "Installing usb-modeswitch..."
-    (apt-get install -y usb-modeswitch &>> /var/log/soracom_setup.log) &
+    (apt-get install -y usb-modeswitch >> /var/log/soracom_setup.log 2>&1) &
     spin $!
     printf " Done!\n"
 else
@@ -232,7 +243,7 @@ sleep 1
 if [ -f /etc/os-release ]
 then
   bullseye_or_later="$(
-    source /etc/os-release
+    . /etc/os-release
     if { [ "$ID" = "raspbian" ] || [ "$ID" = "debian" ]; } && [ "$VERSION_ID" -ge 11 ]
     then
       echo "true"
@@ -303,7 +314,7 @@ echo "Adding Soracom route rule..."
 if [ -f /etc/NetworkManager/dispatcher.d/90.soracom_route ]
 then
     echo "Soracom route rule already exists!"
-elif [[ "$APN" == *"soracom.io" ]]; then
+elif case "$APN" in *soracom.io*) true ;; *) false ;; esac; then
     setup_route
     echo "Soracom route rule created: /etc/NetworkManager/dispatcher.d/90.soracom_route"
 else
@@ -316,45 +327,48 @@ sleep 1
 # Add Soracom connection profile
 echo "---"
 echo "Adding Soracom connection profile..."
-CONNECTIONS=()
-WWAN_INTERFACES=($(get_wwan_interfaces))
-if [ ${#WWAN_INTERFACES[@]} -gt 0 ]
+WWAN_INTERFACES="$(get_wwan_interfaces)"
+GSM_DEVICES="$(get_nmcli_gsm_devices)"
+if [ -n "$GSM_DEVICES" ]
 then
-    for iface in "${WWAN_INTERFACES[@]}"
+    for device_name in $GSM_DEVICES
     do
-        connection_name="soracom-${iface}"
-        CONNECTIONS+=("${connection_name}")
-        if nmcli con show "${connection_name}" &> /dev/null
+        connection_name="soracom-${device_name}"
+        if nmcli con show "${connection_name}" > /dev/null 2>&1
         then
             echo "Soracom connection profile already exists: ${connection_name}!"
-            if [ "$(nmcli -t -f DEVICE,STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" == "disconnected" ]
+            if [ "$(nmcli -t -f GENERAL.STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "deactivated" ]
             then
-                printf "Bringing up connection ${connection_name}..."
-                (nmcli con up "${connection_name}" &>> /var/log/soracom_setup.log) &
-                spin $!
-                printf " Done!\n"
+                if is_nmcli_device_present "${device_name}"
+                then
+                    printf "Bringing up connection ${connection_name}..."
+                    (nmcli con up "${connection_name}" ifname "${device_name}" >> /var/log/soracom_setup.log 2>&1) &
+                    spin $!
+                    printf " Done!\n"
+                else
+                    echo "Skipping activation for ${connection_name}; device ${device_name} not found by NetworkManager."
+                fi
             fi
         else
-            nmcli con add type gsm ifname "${iface}" con-name "${connection_name}" apn $APN user $USERNAME password $PASSWORD &>> /var/log/soracom_setup.log
+            nmcli con add type gsm ifname "${device_name}" con-name "${connection_name}" apn $APN user $USERNAME password $PASSWORD >> /var/log/soracom_setup.log 2>&1
             echo "Connection profile added: ${connection_name}"
         fi
     done
 else
-    if nmcli con show soracom &> /dev/null
+    if nmcli con show soracom > /dev/null 2>&1
     then
         echo "Soracom connection profile already exists!"
-        if [ "$(nmcli dev | grep soracom | awk '{print $3}')" == "disconnected" ]
+        if [ "$(nmcli -t -f GENERAL.STATE con show soracom | head -1 | awk -F: '{print $2}')" = "deactivated" ]
         then
             printf "Bringing up connection..."
-            (nmcli con up soracom &>> /var/log/soracom_setup.log) &
+            (nmcli con up soracom >> /var/log/soracom_setup.log 2>&1) &
             spin $!
             printf " Done!\n"
         fi
     else
-        nmcli con add type gsm ifname "*" con-name soracom apn $APN user $USERNAME password $PASSWORD &>> /var/log/soracom_setup.log
+        nmcli con add type gsm ifname "*" con-name soracom apn $APN user $USERNAME password $PASSWORD >> /var/log/soracom_setup.log 2>&1
         echo "Connection profile added: soracom"
     fi
-    CONNECTIONS+=("soracom")
 fi
 echo
 sleep 1
@@ -365,17 +379,44 @@ if [ "$HEADLESS" = "false" ]
 then
     if [ "$bullseye_or_later" = "true" ]
     then
-        for iface in "${WWAN_INTERFACES[@]}"
-        do
-            ifconfig "${iface}" down
-            echo "Y" > "/sys/class/net/${iface}/qmi/raw_ip"
-            ifconfig "${iface}" up
-        done
-        for connection_name in "${CONNECTIONS[@]}"
-        do
-            nmcli con down "${connection_name}"
-            nmcli con up "${connection_name}"
-        done
+        if [ -n "$GSM_DEVICES" ]
+        then
+            for iface in $WWAN_INTERFACES
+            do
+                ifconfig "${iface}" down
+                if [ -e "/sys/class/net/${iface}/qmi/raw_ip" ]
+                then
+                    echo "Y" > "/sys/class/net/${iface}/qmi/raw_ip"
+                fi
+                ifconfig "${iface}" up
+            done
+            for device_name in $GSM_DEVICES
+            do
+                connection_name="soracom-${device_name}"
+                if nmcli con show "${connection_name}" > /dev/null 2>&1
+                then
+                    if is_nmcli_device_present "${device_name}"
+                    then
+                        if [ "$(nmcli -t -f GENERAL.STATE con show "${connection_name}" | head -1 | awk -F: '{print $2}')" = "activated" ]
+                        then
+                            nmcli con down "${connection_name}"
+                        fi
+                        nmcli con up "${connection_name}" ifname "${device_name}"
+                    else
+                        echo "Skipping activation for ${connection_name}; device ${device_name} not found by NetworkManager."
+                    fi
+                fi
+            done
+        else
+            if nmcli con show soracom > /dev/null 2>&1
+            then
+                if [ "$(nmcli -t -f GENERAL.STATE con show soracom | head -1 | awk -F: '{print $2}')" = "activated" ]
+                then
+                    nmcli con down soracom
+                fi
+                nmcli con up soracom
+            fi
+        fi
     fi
 fi
 
@@ -399,7 +440,8 @@ Tips:
 - When you reboot or plug in your modem, it will automatically connect.
 - When wifi is connected, the modem will be used only for Soracom services.
 - You can manually disconnect and reconnect the modem using:
-    sudo nmcli con down soracom
-    sudo nmcli con up soracom
+    nmcli con show | grep soracom
+    sudo nmcli con down soracom-<device>
+    sudo nmcli con up soracom-<device>
 
 EOF
